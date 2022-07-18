@@ -13,25 +13,25 @@ from ac import AutoComplete
 from dataset import CopymaskDataset
 
 #%%
-class args:
-    data_file = 'datasets/data/data.csv'
-    id_name = 'ID'
-    lr = 0.1
-    batch_size = 2048
-    val_split = 0.8
-    device = 'cuda:0'
-    epochs = 200
-    momentum = 0.9
+# class args:
+#     data_file = 'datasets/data/data.csv'
+#     id_name = 'ID'
+#     lr = 0.1
+#     batch_size = 2048
+#     val_split = 0.8
+#     device = 'cuda:0'
+#     epochs = 200
+#     momentum = 0.9
 #%%
 parser = argparse.ArgumentParser(description='AutoComplete')
-parser.add_argument('data_file', type=str)
-parser.add_argument('--id_name', type=str, default='ID')
-parser.add_argument('--batch_size', nargs='?', type=int, default=2048)
-parser.add_argument('--epochs', nargs='?', type=int, default=200)
-parser.add_argument('--lr', nargs='?', type=float, default=0.1)
-parser.add_argument('--momentum', nargs='?', type=float, default=0.9)
-parser.add_argument('--val_split', nargs='?', type=float, default=0.8)
-parser.add_argument('--device', nargs='?', type=str, default='cuda:0')
+parser.add_argument('data_file', type=str, help='CSV file where rows are samples and columns correspond to features.')
+parser.add_argument('--id_name', type=str, default='ID', help='Column in CSV file which is the identifier for the samples.')
+parser.add_argument('--batch_size', nargs='?', type=int, default=2048, help='Batch size for fitting the model.')
+parser.add_argument('--epochs', nargs='?', type=int, default=200, help='Number of epochs.')
+parser.add_argument('--lr', nargs='?', type=float, default=0.1, help='Learning rate for fitting the model. A starting LR between 2~0.1 is recommended.')
+parser.add_argument('--momentum', nargs='?', type=float, default=0.9, help='Momentum for SGD optimizer (default is recommended).')
+parser.add_argument('--val_split', nargs='?', type=float, default=0.8, help='Amount of data to use as a validation split. The validation split is monitored for convergeance.')
+parser.add_argument('--device', nargs='?', type=str, default='cuda:0', help='Device available for torch (use cpu:0 if no GPU available).')
 
 args = parser.parse_args()
 
