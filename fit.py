@@ -31,7 +31,7 @@ parser.add_argument('--epochs', nargs='?', type=int, default=200, help='Number o
 parser.add_argument('--lr', nargs='?', type=float, default=0.1, help='Learning rate for fitting the model. A starting LR between 2~0.1 is recommended.')
 parser.add_argument('--momentum', nargs='?', type=float, default=0.9, help='Momentum for SGD optimizer (default is recommended).')
 parser.add_argument('--val_split', nargs='?', type=float, default=0.8, help='Amount of data to use as a validation split. The validation split is monitored for convergeance.')
-parser.add_argument('--device', nargs='?', type=str, default='cuda:0', help='Device available for torch (use cpu:0 if no GPU available).')
+parser.add_argument('--device', nargs='?', type=str, default='cpu:0', help='Device available for torch (use cpu:0 if no GPU available).')
 
 args = parser.parse_args()
 
