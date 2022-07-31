@@ -39,9 +39,10 @@ AutoComplete can run easily for most datasets in CSV format such as:
 python fit.py datasets/random/data.csv --id_name ID --batch_size 512 --epochs 50 --lr 0.1 --device cpu:0
 ```
 
-The `id_name` option specifies which column of the dataset to use as an identifier for each sample.
+The first row of the data file is expected to be a header with names for each column, where the `id_name` option specifies which column of the dataset to use as an identifier for each sample. Missing values should be left as blank entries in the CSV file without any NA or NaN tokens. The expected formatting is therefore eg. `1,,2` where there is a missing value implied between 1 and 2.
+
 Continuous or binary-valued features will be automatically detected based on the number of unique values which are present per feature
-(having only 2 values will be interpreted as a binary feature). Missing values should be left as blank entries in the CSV file without any NA or NaN tokens. The expected formatting is therefore eg. `1,,2` where there is a missing value implied between 1 and 2.
+(having only 2 values will be interpreted as a binary feature). 
 
 A version of the dataset with imputed values will be saved with a prefix in the same folder such as `imputed_{data_file}`. Alternatively the output file path can be manually specified using the `--output` option.
 
