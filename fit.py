@@ -41,6 +41,9 @@ parser.add_argument('--encoding_ratio', nargs='?', type=float, default=1,
 parser.add_argument('--depth', nargs='?', type=int, default=1, help='# of fully connected layers between input and centermost deep layer; ' + \
     'the # of layers beteen the centermost layer and the output layer will be defined equally.')
 
+parser.add_argument('--impute_using_saved', nargs='?', type=str, help='Load trained weights from a saved .pth file to ' + \
+    'impute the data without going through model training.')
+
 args = parser.parse_args()
 
 #%%
@@ -64,6 +67,7 @@ binary_features = tab.columns[ncats == 2]
 contin_features = tab.columns[~(ncats == 2)]
 feature_ord = list(contin_features) + list(binary_features)
 print(f'Features loaded: contin={len(contin_features)}, binary={len(binary_features)}')
+CONT_BINARY_SPLIT = len(contin_features)
 # %%
 # keep a validation set
 val_ind = int(tab.shape[0]*args.val_split)
@@ -99,102 +103,105 @@ core = AutoComplete(
 model = core.to(args.device)
 print(core)
 
-cont_crit = nn.MSELoss()
-binary_crit = nn.BCEWithLogitsLoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-scheduler = ReduceLROnPlateau(optimizer, factor=0.5, threshold=1e-10, patience=5)
-CONT_BINARY_SPLIT = len(contin_features)
+if not args.impute_using_saved:
+    cont_crit = nn.MSELoss()
+    binary_crit = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    scheduler = ReduceLROnPlateau(optimizer, factor=0.5, threshold=1e-10, patience=5)
 
-def get_lr():
-    for param_group in optimizer.param_groups:
-        return param_group['lr']
-print('starting lr', get_lr())
+    def get_lr():
+        for param_group in optimizer.param_groups:
+            return param_group['lr']
+    print('starting lr', get_lr())
 
-hist = dict(
-    train=list(),
-    val=list(),
-    lr=list(),
-)
-best_test_loss = None
-for ep in range(args.epochs):
-    for phase in (['train', 'val']):
-        model.train() if phase == 'train' else model.eval()
+    hist = dict(
+        train=list(),
+        val=list(),
+        lr=list(),
+    )
+    best_test_loss = None
+    for ep in range(args.epochs):
+        for phase in (['train', 'val']):
+            model.train() if phase == 'train' else model.eval()
 
-        t_ep = time()
-        ep_hist = dict(total=list(), binary=list())
-        dset = dataloaders[phase]
+            t_ep = time()
+            ep_hist = dict(total=list(), binary=list())
+            dset = dataloaders[phase]
 
-        for bi, batch in enumerate(dset):
-            datarow, nan_inds, train_inds = batch
-            datarow = datarow.float()
-            masked_data = datarow.clone().detach()
-            masked_data[train_inds] = 0
+            for bi, batch in enumerate(dset):
+                datarow, nan_inds, train_inds = batch
+                datarow = datarow.float()
+                masked_data = datarow.clone().detach()
+                masked_data[train_inds] = 0
 
-            existing_inds = ~nan_inds
-            score_inds = existing_inds
-            score_inds = score_inds.to(args.device)
-            masked_data = masked_data.to(args.device)
-            datarow = datarow.to(args.device)
+                existing_inds = ~nan_inds
+                score_inds = existing_inds
+                score_inds = score_inds.to(args.device)
+                masked_data = masked_data.to(args.device)
+                datarow = datarow.to(args.device)
 
-            optimizer.zero_grad()
-            with torch.set_grad_enabled(phase == 'train'):
-                yhat = model(masked_data)
-                sind = CONT_BINARY_SPLIT
+                optimizer.zero_grad()
+                with torch.set_grad_enabled(phase == 'train'):
+                    yhat = model(masked_data)
+                    sind = CONT_BINARY_SPLIT
 
-                l_cont = cont_crit((yhat*score_inds)[:,:sind], (datarow*score_inds)[:, :sind])
-                binarized = (((datarow)*score_inds)[:, sind:] > 0.5).float()
-                l_binary = binary_crit(
-                    (yhat*score_inds)[:, sind:],
-                    binarized)
-                loss = l_cont + l_binary
+                    l_cont = cont_crit((yhat*score_inds)[:,:sind], (datarow*score_inds)[:, :sind])
+                    binarized = (((datarow)*score_inds)[:, sind:] > 0.5).float()
+                    l_binary = binary_crit(
+                        (yhat*score_inds)[:, sind:],
+                        binarized)
+                    loss = l_cont + l_binary
 
-                ep_hist['total'] += [loss.item()]
-                ep_hist['binary'] += [l_binary.item()]
-                if np.isnan(loss.item()):
-                    print(yhat.isnan().sum())
-                    print(l_cont.item())
-                    print(l_binary.item())
+                    ep_hist['total'] += [loss.item()]
+                    ep_hist['binary'] += [l_binary.item()]
+                    if np.isnan(loss.item()):
+                        print(yhat.isnan().sum())
+                        print(l_cont.item())
+                        print(l_binary.item())
 
-            if phase == 'train':
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)
-                optimizer.step()
+                if phase == 'train':
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)
+                    optimizer.step()
 
-            print(f'\r[E{ep+1} {phase} {bi+1}/{len(dset)}] - L%.4f (%.4f %.4f) %.1fs LR:{get_lr()}   ' % (
-                np.mean(ep_hist['total']), l_cont.item(), l_binary.item(),(time() - t_ep)
-            ), end='')
+                print(f'\r[E{ep+1} {phase} {bi+1}/{len(dset)}] - L%.4f (%.4f %.4f) %.1fs LR:{get_lr()}   ' % (
+                    np.mean(ep_hist['total']), l_cont.item(), l_binary.item(),(time() - t_ep)
+                ), end='')
 
-        print()
+            print()
 
-        hist[phase] += [ep_hist['total']]
-        hist['lr'] += [get_lr()]
+            hist[phase] += [ep_hist['total']]
+            hist['lr'] += [get_lr()]
 
-    scheduler.step(np.mean(hist['val'][-1]))
+        scheduler.step(np.mean(hist['val'][-1]))
 
-    with open(save_model_name + '.json', 'w') as fl:
-        json.dump(hist, fl)
+        with open(save_model_name + '.json', 'w') as fl:
+            json.dump(hist, fl)
 
-    # save if loss improved
-    current_loss = hist['val'][-1]
-    if best_test_loss == None or best_test_loss > current_loss:
-        best_test_loss = current_loss
-        torch.save(core, save_model_name)
-        print('saved')
+        # save if loss improved
+        current_loss = hist['val'][-1]
+        if best_test_loss == None or best_test_loss > current_loss:
+            best_test_loss = current_loss
+            torch.save(core, save_model_name)
+            print('saved')
 
-    # if starting to overfit, stop early
-    if ep > 50:
-        loss_1 = np.mean(hist['test'][-1])
-        loss_50 = np.mean(hist['val'][-50])
-        if loss_1 > loss_50*2:
+        # if starting to overfit, stop early
+        if ep > 50:
+            loss_1 = np.mean(hist['test'][-1])
+            loss_50 = np.mean(hist['val'][-50])
+            if loss_1 > loss_50*2:
 
-            print('Early stopping', loss_1, '>', loss_50, '(x2)')
+                print('Early stopping', loss_1, '>', loss_50, '(x2)')
+                break
+
+        if np.isnan(np.mean(hist['val'][-1])):
+            print('Training NaN, exiting...')
             break
-
-    if np.isnan(np.mean(hist['val'][-1])):
-        print('Training NaN, exiting...')
-        break
 #%%
 model.eval()
+if args.impute_using_saved:
+    model = torch.load(args.impute_using_saved)
+    model = model.to(args.device)
 dset = dataloaders['final']
 preds_ls = []
 for bi, batch in enumerate(dset):
