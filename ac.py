@@ -11,7 +11,7 @@ class AutoComplete(nn.Module):
 			indim=80, # input data dimension
 			width=10, # encoding dim ratio; 10=x1.0, 20=x0.5
 			n_depth=4, # number of layers between input layer & encoding layer
-			n_multiples=1, # repeated layers of same dim per layer
+			n_multiples=0, # repeated layers of same dim per layer
 			nonlin=lambda dim: torch.nn.LeakyReLU(inplace=True), # the nonlinearity
 			verbose=True
 		):

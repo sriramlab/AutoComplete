@@ -26,19 +26,32 @@ from dataset import CopymaskDataset
 parser = argparse.ArgumentParser(description='AutoComplete')
 parser.add_argument('data_file', type=str, help='CSV file where rows are samples and columns correspond to features.')
 parser.add_argument('--id_name', type=str, default='ID', help='Column in CSV file which is the identifier for the samples.')
+parser.add_argument('--output', nargs='?', type=str, help='The imputed version of the data will be saved as this file. ' +\
+    'If not specified the imputed data will be saved as `imputed_{data_file}` in the same folder as the `data_file`.')
+
 parser.add_argument('--batch_size', nargs='?', type=int, default=2048, help='Batch size for fitting the model.')
 parser.add_argument('--epochs', nargs='?', type=int, default=200, help='Number of epochs.')
 parser.add_argument('--lr', nargs='?', type=float, default=0.1, help='Learning rate for fitting the model. A starting LR between 2~0.1 is recommended.')
 parser.add_argument('--momentum', nargs='?', type=float, default=0.9, help='Momentum for SGD optimizer (default is recommended).')
 parser.add_argument('--val_split', nargs='?', type=float, default=0.8, help='Amount of data to use as a validation split. The validation split is monitored for convergeance.')
 parser.add_argument('--device', nargs='?', type=str, default='cpu:0', help='Device available for torch (use cpu:0 if no GPU available).')
+parser.add_argument('--encoding_ratio', nargs='?', type=float, default=1,
+    help='Size of the centermost encoding dimension as a ratio of # of input features; ' + \
+    'eg. `0.5` would force an encoding by half.')
+parser.add_argument('--depth', nargs='?', type=int, default=1, help='# of fully connected layers between input and centermost deep layer; ' + \
+    'the # of layers beteen the centermost layer and the output layer will be defined equally.')
 
 args = parser.parse_args()
 
 #%%
-save_folder = '/'.join(args.data_file.split('/')[:-1]) + '/'
+fparts = args.data_file.split('/')
+save_folder = '/'.join(fparts[:-1]) + '/'
 save_model_name = save_folder + 'model.pth'
-save_table_name = save_folder + 'imputed.csv'
+
+if args.output:
+    save_table_name = args.output
+else:
+    save_table_name = save_folder + f'imputed_{fparts[-1]}'
 print('Saving model to:', save_model_name)
 print('Saving imputed table to:', save_table_name)
 #%%
@@ -80,9 +93,8 @@ dataloaders = {
 feature_dim = dsets['train'].shape[1]
 core = AutoComplete(
         indim=feature_dim,
-        width=1,
-        n_depth=1,
-        n_multiples=1,
+        width=1/args.encoding_ratio,
+        n_depth=args.depth,
     )
 model = core.to(args.device)
 print(core)
