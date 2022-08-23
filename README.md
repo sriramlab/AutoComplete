@@ -25,7 +25,45 @@ conda activate ac
 pip install -r requirements.txt
 ```
 
-## Usage
+## Imputation Demo
+
+An example procedure for fitting, imputing, and scoring a simulated phenotype dataset with missing values can be found in `tutorials/`. To run this pipeline, do:
+
+```bash
+./tutorials/phenotype_demo.sh
+```
+
+The script runs the following commands. First, artificial missing values are introduced to `datasets/phenotypes/data.csv` such that they can be withheld then scored after imputation.
+```bash
+python tutorials/phenotype_missingness_simulation.py
+```
+
+Then, the method is fit to a training split of the data saved to `datasets/phenotypes/data_fit.csv`.
+```bash
+python fit.py datasets/phenotypes/data_fit.csv \
+    --id_name ID \
+    --copymask_amount 0.5 \
+    --batch_size 2048 \
+    --epochs 100 \
+    --lr 0.1 \
+    --device cpu:0
+```
+
+The fitted model is used to impute the testing split of the data which is `datasets/phenotypes/data_test.csv`.
+```bash
+python fit.py datasets/phenotypes/data_fit.csv \
+    --id_name ID \
+    --impute_using_saved datasets/phenotypes/model.pth \
+    --impute_data_file datasets/phenotypes/data_test.csv \
+    --device cpu:0
+```
+
+Finally, the simulated missing values are scored using Pearson's r^2 correlation.
+```bash
+python tutorials/phenotype_imputation_score.py
+```
+
+## General Usage
 
 To show all available options:
 
