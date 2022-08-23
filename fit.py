@@ -13,15 +13,21 @@ from ac import AutoComplete
 from dataset import CopymaskDataset
 
 #%%
-# class args:
-#     data_file = 'datasets/data/data.csv'
-#     id_name = 'ID'
-#     lr = 0.1
-#     batch_size = 2048
-#     val_split = 0.8
-#     device = 'cuda:0'
-#     epochs = 200
-#     momentum = 0.9
+class args:
+    data_file = 'datasets/phenotypes/data_fit.csv'
+    id_name = 'ID'
+    lr = 0.1
+    batch_size = 2048
+    val_split = 0.8
+    device = 'cuda:0'
+    epochs = 200
+    momentum = 0.9
+    impute_using_saved = 'datasets/phenotypes/model.pth'
+    output = None
+    encoding_ratio = 1
+    depth = 1
+    impute_data_file = None
+    copymask_amount = 0.3
 #%%
 parser = argparse.ArgumentParser(description='AutoComplete')
 parser.add_argument('data_file', type=str, help='CSV file where rows are samples and columns correspond to features.')
@@ -29,6 +35,7 @@ parser.add_argument('--id_name', type=str, default='ID', help='Column in CSV fil
 parser.add_argument('--output', nargs='?', type=str, help='The imputed version of the data will be saved as this file. ' +\
     'If not specified the imputed data will be saved as `imputed_{data_file}` in the same folder as the `data_file`.')
 
+parser.add_argument('--copymask_amount', nargs='?', type=float, default=0.3, help='Probability that a sample will be copy-masked. A range from 10%%~50%% is recommemded.')
 parser.add_argument('--batch_size', nargs='?', type=int, default=2048, help='Batch size for fitting the model.')
 parser.add_argument('--epochs', nargs='?', type=int, default=200, help='Number of epochs.')
 parser.add_argument('--lr', nargs='?', type=float, default=0.1, help='Learning rate for fitting the model. A starting LR between 2~0.1 is recommended.')
@@ -43,6 +50,7 @@ parser.add_argument('--depth', nargs='?', type=int, default=1, help='# of fully 
 
 parser.add_argument('--impute_using_saved', nargs='?', type=str, help='Load trained weights from a saved .pth file to ' + \
     'impute the data without going through model training.')
+parser.add_argument('--impute_data_file', nargs='?', type=str, help='CSV file where rows are samples and columns correspond to features.')
 
 args = parser.parse_args()
 
@@ -55,7 +63,7 @@ if args.output:
     save_table_name = args.output
 else:
     save_table_name = save_folder + f'imputed_{fparts[-1]}'
-print('Saving model to:', save_model_name)
+if not args.impute_using_saved: print('Saving model to:', save_model_name)
 print('Saving imputed table to:', save_table_name)
 #%%
 tab = pd.read_csv(args.data_file).set_index(args.id_name)
@@ -89,7 +97,7 @@ normd_dsets = {
 # %%
 dataloaders = {
     split: torch.utils.data.DataLoader(
-        CopymaskDataset(mat, split),
+        CopymaskDataset(mat, split, copymask_amount=args.copymask_amount),
         batch_size=args.batch_size,
         shuffle=split=='train', num_workers=0) \
             for split, mat in normd_dsets.items() }
@@ -102,7 +110,7 @@ core = AutoComplete(
     )
 model = core.to(args.device)
 print(core)
-
+#%%
 if not args.impute_using_saved:
     cont_crit = nn.MSELoss()
     binary_crit = nn.BCEWithLogitsLoss()
@@ -187,7 +195,7 @@ if not args.impute_using_saved:
 
         # if starting to overfit, stop early
         if ep > 50:
-            loss_1 = np.mean(hist['test'][-1])
+            loss_1 = np.mean(hist['val'][-1])
             loss_50 = np.mean(hist['val'][-50])
             if loss_1 > loss_50*2:
 
@@ -199,10 +207,24 @@ if not args.impute_using_saved:
             break
 #%%
 model.eval()
+dset = dataloaders['final']
+
 if args.impute_using_saved:
     model = torch.load(args.impute_using_saved)
     model = model.to(args.device)
-dset = dataloaders['final']
+
+if args.impute_data_file:
+    imptab = pd.read_csv(args.impute_data_file).set_index(args.id_name)[feature_ord]
+    print(f'(impute) Dataset size:', imptab.shape[0])
+    mat_imptab = (imptab.values - train_stats['mean'])/train_stats['std']
+    dset = torch.utils.data.DataLoader(
+        CopymaskDataset(mat_imptab, 'final'),
+        batch_size=args.batch_size,
+        shuffle=False, num_workers=0)
+    if not args.output:
+        impute_fparts = args.impute_data_file.split('/')
+        save_table_name = save_folder + f'imputed_{impute_fparts[-1]}'
+
 preds_ls = []
 for bi, batch in enumerate(dset):
     datarow, _, masked_inds = batch
@@ -218,15 +240,16 @@ for bi, batch in enumerate(dset):
 print()
 #%%
 pmat = np.concatenate(preds_ls)
-template = tab.copy()
+pmat[:, :CONT_BINARY_SPLIT] = (pmat[:,:CONT_BINARY_SPLIT] * train_stats['std'][:CONT_BINARY_SPLIT]) \
+    + train_stats['mean'][:CONT_BINARY_SPLIT]
+#%%
+template = tab.copy() if not args.impute_data_file else imptab.copy()
 tmat = template.values
 tmat[np.isnan(tmat)] = pmat[np.isnan(tmat)]
-rawscale = (tmat[:,:CONT_BINARY_SPLIT] * train_stats['std'][:CONT_BINARY_SPLIT]) \
-    + train_stats['mean'][:CONT_BINARY_SPLIT]
-tmat[:, :CONT_BINARY_SPLIT] = rawscale
 template[:] = tmat
 template
 # %%
 template.to_csv(save_table_name)
 #%%
 print('done')
+#%%
