@@ -153,11 +153,14 @@ if not args.impute_using_saved:
                     yhat = model(masked_data)
                     sind = CONT_BINARY_SPLIT
 
-                    l_cont = cont_crit((yhat*score_inds)[:,:sind], (datarow*score_inds)[:, :sind])
-                    binarized = (((datarow)*score_inds)[:, sind:] > 0.5).float()
-                    l_binary = binary_crit(
-                        (yhat*score_inds)[:, sind:],
-                        binarized)
+                    l_cont, l_binary = torch.zeros(1), torch.zeros(1)
+                    if len(contin_features) != 0:
+                        l_cont = cont_crit((yhat*score_inds)[:,:sind], (datarow*score_inds)[:, :sind])
+                    if len(binary_features) != 0:
+                        binarized = (((datarow)*score_inds)[:, sind:] > 0.5).float()
+                        l_binary = binary_crit(
+                            (yhat*score_inds)[:, sind:],
+                            binarized)
                     loss = l_cont + l_binary
 
                     ep_hist['total'] += [loss.item()]
