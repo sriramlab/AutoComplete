@@ -32,25 +32,25 @@ class args:
 parser = argparse.ArgumentParser(description='AutoComplete')
 parser.add_argument('data_file', type=str, help='CSV file where rows are samples and columns correspond to features.')
 parser.add_argument('--id_name', type=str, default='ID', help='Column in CSV file which is the identifier for the samples.')
-parser.add_argument('--output', nargs='?', type=str, help='The imputed version of the data will be saved as this file. ' +\
+parser.add_argument('--output', type=str, help='The imputed version of the data will be saved as this file. ' +\
     'If not specified the imputed data will be saved as `imputed_{data_file}` in the same folder as the `data_file`.')
 
-parser.add_argument('--copymask_amount', nargs='?', type=float, default=0.3, help='Probability that a sample will be copy-masked. A range from 10%%~50%% is recommemded.')
-parser.add_argument('--batch_size', nargs='?', type=int, default=2048, help='Batch size for fitting the model.')
-parser.add_argument('--epochs', nargs='?', type=int, default=200, help='Number of epochs.')
-parser.add_argument('--lr', nargs='?', type=float, default=0.1, help='Learning rate for fitting the model. A starting LR between 2~0.1 is recommended.')
-parser.add_argument('--momentum', nargs='?', type=float, default=0.9, help='Momentum for SGD optimizer (default is recommended).')
-parser.add_argument('--val_split', nargs='?', type=float, default=0.8, help='Amount of data to use as a validation split. The validation split is monitored for convergeance.')
-parser.add_argument('--device', nargs='?', type=str, default='cpu:0', help='Device available for torch (use cpu:0 if no GPU available).')
-parser.add_argument('--encoding_ratio', nargs='?', type=float, default=1,
+parser.add_argument('--copymask_amount', type=float, default=0.3, help='Probability that a sample will be copy-masked. A range from 10%%~50%% is recommemded.')
+parser.add_argument('--batch_size', type=int, default=2048, help='Batch size for fitting the model.')
+parser.add_argument('--epochs', type=int, default=200, help='Number of epochs.')
+parser.add_argument('--lr', type=float, default=0.1, help='Learning rate for fitting the model. A starting LR between 2~0.1 is recommended.')
+parser.add_argument('--momentum', type=float, default=0.9, help='Momentum for SGD optimizer (default is recommended).')
+parser.add_argument('--val_split', type=float, default=0.8, help='Amount of data to use as a validation split. The validation split is monitored for convergeance.')
+parser.add_argument('--device', type=str, default='cpu:0', help='Device available for torch (use cpu:0 if no GPU available).')
+parser.add_argument('--encoding_ratio', type=float, default=1,
     help='Size of the centermost encoding dimension as a ratio of # of input features; ' + \
     'eg. `0.5` would force an encoding by half.')
-parser.add_argument('--depth', nargs='?', type=int, default=1, help='# of fully connected layers between input and centermost deep layer; ' + \
+parser.add_argument('--depth', type=int, default=1, help='# of fully connected layers between input and centermost deep layer; ' + \
     'the # of layers beteen the centermost layer and the output layer will be defined equally.')
 
-parser.add_argument('--impute_using_saved', nargs='?', type=str, help='Load trained weights from a saved .pth file to ' + \
+parser.add_argument('--impute_using_saved', type=str, help='Load trained weights from a saved .pth file to ' + \
     'impute the data without going through model training.')
-parser.add_argument('--impute_data_file', nargs='?', type=str, help='CSV file where rows are samples and columns correspond to features.')
+parser.add_argument('--impute_data_file', type=str, help='CSV file where rows are samples and columns correspond to features.')
 
 args = parser.parse_args()
 
@@ -109,7 +109,6 @@ core = AutoComplete(
         n_depth=args.depth,
     )
 model = core.to(args.device)
-print(core)
 #%%
 if not args.impute_using_saved:
     cont_crit = nn.MSELoss()
@@ -120,7 +119,6 @@ if not args.impute_using_saved:
     def get_lr():
         for param_group in optimizer.param_groups:
             return param_group['lr']
-    print('starting lr', get_lr())
 
     hist = dict(
         train=list(),
@@ -208,13 +206,12 @@ if not args.impute_using_saved:
         if np.isnan(np.mean(hist['val'][-1])):
             print('Training NaN, exiting...')
             break
-#%%
-model.eval()
-dset = dataloaders['final']
-
-if args.impute_using_saved:
+else:
     model = torch.load(args.impute_using_saved)
     model = model.to(args.device)
+
+model.eval()
+dset = dataloaders['final']
 
 if args.impute_data_file:
     imptab = pd.read_csv(args.impute_data_file).set_index(args.id_name)[feature_ord]
@@ -228,31 +225,30 @@ if args.impute_data_file:
         impute_fparts = args.impute_data_file.split('/')
         save_table_name = save_folder + f'imputed_{impute_fparts[-1]}'
 
-preds_ls = []
-for bi, batch in enumerate(dset):
-    datarow, _, masked_inds = batch
-    datarow = datarow.float().to(args.device)
+    preds_ls = []
+    for bi, batch in enumerate(dset):
+        datarow, _, masked_inds = batch
+        datarow = datarow.float().to(args.device)
 
-    with torch.no_grad():
-        yhat = model(datarow)
-    sind = CONT_BINARY_SPLIT
-    yhat = torch.cat([yhat[:, :sind], torch.sigmoid(yhat[:, sind:])], dim=1)
+        with torch.no_grad():
+            yhat = model(datarow)
+        sind = CONT_BINARY_SPLIT
+        yhat = torch.cat([yhat[:, :sind], torch.sigmoid(yhat[:, sind:])], dim=1)
 
-    preds_ls += [yhat.cpu().numpy()]
-    print(f'\r{bi}/{len(dset)}', end='')
-print()
-#%%
-pmat = np.concatenate(preds_ls)
-pmat[:, :CONT_BINARY_SPLIT] = (pmat[:,:CONT_BINARY_SPLIT] * train_stats['std'][:CONT_BINARY_SPLIT]) \
-    + train_stats['mean'][:CONT_BINARY_SPLIT]
-#%%
-template = tab.copy() if not args.impute_data_file else imptab.copy()
-tmat = template.values
-tmat[np.isnan(tmat)] = pmat[np.isnan(tmat)]
-template[:] = tmat
-template
-# %%
-template.to_csv(save_table_name)
-#%%
+        preds_ls += [yhat.cpu().numpy()]
+        print(f'\r{bi}/{len(dset)}', end='')
+
+    print()
+
+    pmat = np.concatenate(preds_ls)
+    pmat[:, :CONT_BINARY_SPLIT] = (pmat[:,:CONT_BINARY_SPLIT] * train_stats['std'][:CONT_BINARY_SPLIT]) \
+        + train_stats['mean'][:CONT_BINARY_SPLIT]
+    template = tab.copy() if not args.impute_data_file else imptab.copy()
+    tmat = template.values
+    tmat[np.isnan(tmat)] = pmat[np.isnan(tmat)]
+    template[:] = tmat
+    template
+
+    template.to_csv(save_table_name)
+
 print('done')
-#%%
