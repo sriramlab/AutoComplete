@@ -58,9 +58,13 @@ python fit.py datasets/phenotypes/data_fit.csv \
     --device cpu:0
 ```
 
-Finally, the simulated missing values are scored using Pearson's r^2 correlation.
+Finally, the simulated missing values are scored against their originally observed values. The Pearson's r^2 correlation is used and 100 bootstrap replicates are used to obtain the point estimate of the accuracy and its standard error.
 ```bash
-python tutorials/phenotype_imputation_score.py
+python bootstrap_r2_statistic.py datasets/phenotypes/data.csv \
+    --simulated_data_file datasets/phenotypes/data_test.csv \
+    --imputed_data_file datasets/phenotypes/imputed_data_test.csv \
+    --num_bootstraps 100 \
+    --saveas result_r2_phenotype_demo.csv
 ```
 
 ## General Usage
@@ -80,7 +84,7 @@ python fit.py datasets/random/data.csv --id_name ID --batch_size 512 --epochs 50
 The first row of the data file is expected to be a header with names for each column, where the `id_name` option specifies which column of the dataset to use as an identifier for each sample. Missing values should be left as blank entries in the CSV file without any NA or NaN tokens. The expected formatting is therefore eg. `1,,2` where there is a missing value implied between 1 and 2.
 
 Continuous or binary-valued features will be automatically detected based on the number of unique values which are present per feature
-(having only 2 values will be interpreted as a binary feature). 
+(having only 2 values will be interpreted as a binary feature).
 
 A version of the dataset with imputed values will be saved with a prefix in the same folder such as `imputed_{data_file}`. Alternatively the output file path can be manually specified using the `--output` option.
 
