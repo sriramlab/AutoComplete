@@ -8,7 +8,7 @@ python fit.py datasets/phenotypes/data_fit.csv \
     --id_name ID \
     --copymask_amount 0.5 \
     --batch_size 2048 \
-    --epochs 100 \
+    --epochs 1 \
     --lr 0.1 \
     --device cpu:0
 
@@ -20,4 +20,10 @@ python fit.py datasets/phenotypes/data_fit.csv \
     --device cpu:0
 
 # score the simulated missing portion
-python tutorials/phenotype_imputation_score.py
+python bootstrap_r2_statistic.py datasets/phenotypes/data.csv \
+    --simulated_data_file datasets/phenotypes/data_test.csv \
+    --imputed_data_file datasets/phenotypes/imputed_data_test.csv \
+    --num_bootstraps 100 \
+    --saveas result_r2_phenotype_demo.csv
+
+echo "done"
