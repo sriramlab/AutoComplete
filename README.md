@@ -101,6 +101,28 @@ Additional configs for the neural net architecture are possible such as the enco
 --encoding_ratio 0.5 --depth 2
 ```
 
+## Multiple Imputations
+
+Multiple imputations allows one way to account for uncertainty in the imputation process for downstream analysis. AutoComplete allows multiple imputations by bootstrapping a given dataset and fitting it multiple times with differently seeded intializations. The `--multiple` argument for `fit.py` allows the script to save a script file `multiple_imputation.sh` to the root directory where each line is an independent command corresponding to a single run of the multiple imputation pipeline. For instance, the following command:
+
+```bash
+python fit.py datasets/phenotypes/data.csv --id_name ID --copymask_amount 0.5 --batch_size 2048 --epochs 1 --lr 0.1 --device cuda:1 --multiple 5
+```
+
+will save 5 lines to `multiple_imputation.sh` with the originally passed arguments:
+
+```bash
+python fit.py datasets/random/data.csv --id_name ID --copymask_amount 0.5 --batch_size 2048 --epochs 100 --lr 0.1 --device cuda:1 --seed 0 --bootstrap --save_imputed
+...
+python fit.py datasets/random/data.csv --id_name ID --copymask_amount 0.5 --batch_size 2048 --epochs 100 --lr 0.1 --device cuda:1 --seed 4 --bootstrap --save_imputed
+```
+
+Each command is responsible for saving one imputed version of the original data matrix in the format of `file_location/imputed_data_seed0_bootstrap.csv` and so on. Since each run is independent, the multiple runs are fully parallelizeable. This is recommended in a number of ways such as `parallel -j 5 < multiple_imputation.sh` on UNIX based systems, piping each line further into a job scheduler on compute clusters, and splitting compute load across multiple GPUs by altering the device flag. The script may also be executed as-is, which will impute each matrix sequentially.
+
+## Imputation Quality
+
+
+
 ## Citing AutoComplete
 
-TBD
+TBA

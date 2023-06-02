@@ -1,17 +1,9 @@
 #%%
 import pandas as pd
-from torch.utils.data import Dataset, DataLoader
-import numpy as np
 from time import time
 import json
 import argparse
-
-import torch
-import torch.nn as nn
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-from ac import AutoComplete
-from dataset import CopymaskDataset
-
+import sys
 #%%
 class args:
     data_file = 'datasets/phenotypes/data_fit.csv'
@@ -35,6 +27,8 @@ parser.add_argument('--id_name', type=str, default='ID', help='Column in CSV fil
 parser.add_argument('--output', type=str, help='The imputed version of the data will be saved as this file. ' +\
     'If not specified the imputed data will be saved as `imputed_{data_file}` in the same folder as the `data_file`.')
 
+parser.add_argument('--save_model_path', type=str, help='A location to save the imputation model weights. Will default to file_name.pth if not set.', default=None)
+
 parser.add_argument('--copymask_amount', type=float, default=0.3, help='Probability that a sample will be copy-masked. A range from 10%%~50%% is recommemded.')
 parser.add_argument('--batch_size', type=int, default=2048, help='Batch size for fitting the model.')
 parser.add_argument('--epochs', type=int, default=200, help='Number of epochs.')
@@ -48,26 +42,84 @@ parser.add_argument('--encoding_ratio', type=float, default=1,
 parser.add_argument('--depth', type=int, default=1, help='# of fully connected layers between input and centermost deep layer; ' + \
     'the # of layers beteen the centermost layer and the output layer will be defined equally.')
 
+parser.add_argument('--save_imputed', help='Will save an imputed version of the matrix immediately after fitting it.', action='store_true', default=False)
 parser.add_argument('--impute_using_saved', type=str, help='Load trained weights from a saved .pth file to ' + \
     'impute the data without going through model training.')
 parser.add_argument('--impute_data_file', type=str, help='CSV file where rows are samples and columns correspond to features.')
+parser.add_argument('--seed', type=int, help='A specific seed to use. Can be used to instantiate multiple imputations.', default=-1)
+parser.add_argument('--bootstrap', help='Flag to specify whether the dataset should be bootstrapped for the purpose of fitting.', default=False, action='store_true')
+parser.add_argument('--multiple', type=int, help='If set, this script will save a list of commands which can be run (either in sequence or in parallel) to save mulitple imputations', default=-1)
 
 args = parser.parse_args()
-
+#%%
+if args.multiple != -1:
+    print('Saving commands for multiple imputations based on the current configs.')
+    configs = sys.argv[1:]
+    mi = configs.index('--multiple')
+    configs.pop(mi)
+    configs.pop(mi)
+    with open('multiple_imputation.sh', 'w') as fl:
+        fl.write('\n'.join([
+            'python fit.py ' + ' '.join(configs) + f' --seed {m} --bootstrap --save_imputed'
+            for m in range(args.multiple)]))
+    exit()
 #%%
 fparts = args.data_file.split('/')
 save_folder = '/'.join(fparts[:-1]) + '/'
-save_model_name = save_folder + 'model.pth'
+filename = args.data_file.split('/')[-1].replace('.csv', '')
+save_model_path = save_folder + filename
 
 if args.output:
     save_table_name = args.output
 else:
-    save_table_name = save_folder + f'imputed_{fparts[-1]}'
-if not args.impute_using_saved: print('Saving model to:', save_model_name)
-print('Saving imputed table to:', save_table_name)
+    save_table_name = save_folder + f'imputed_{filename}'
+
+if args.seed != -1:
+    save_table_name += f'_seed{args.seed}'
+    save_model_path += f'_seed{args.seed}'
+if args.bootstrap:
+    save_table_name += f'_bootstrap'
+    save_model_path += f'_bootstrap'
+
+save_model_path += '.pth'
+save_table_name += '.csv'
+
+if args.save_model_path is not None:
+    save_model_path = args.save_model_path
+
+if not args.impute_using_saved:
+    print('Saving model to:', save_model_path)
+if args.impute_using_saved or args.save_imputed:
+    print('Saving imputed table to:', save_table_name)
+#%%
+import torch
+import random
+import numpy as np
+
+if args.seed != -1:
+    print(f'Using seed: {args.seed}')
+    torch.manual_seed(args.seed)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+
+from torch.utils.data import Dataset, DataLoader
+import torch.nn as nn
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from ac import AutoComplete
+from dataset import CopymaskDataset
 #%%
 tab = pd.read_csv(args.data_file).set_index(args.id_name)
 print(f'Dataset size:', tab.shape[0])
+#%%
+if args.bootstrap:
+    print('Bootstrap mode')
+    ix = list(range(len(tab)))
+    ix = np.random.choice(ix, size=len(tab), replace=True)
+    tab = tab.iloc[ix]
+    print('First few ids are:')
+    for i in tab.index[:5]:
+        print(' ', i)
+
 #%%
 # detect binary phenotypes
 ncats = tab.nunique()
@@ -114,7 +166,7 @@ if not args.impute_using_saved:
     cont_crit = nn.MSELoss()
     binary_crit = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-    scheduler = ReduceLROnPlateau(optimizer, factor=0.5, threshold=1e-10, patience=5)
+    scheduler = ReduceLROnPlateau(optimizer, factor=0.5, threshold=1e-10, patience=20)
 
     def get_lr():
         for param_group in optimizer.param_groups:
@@ -184,14 +236,14 @@ if not args.impute_using_saved:
 
         scheduler.step(np.mean(hist['val'][-1]))
 
-        with open(save_model_name + '.json', 'w') as fl:
+        with open(save_model_path + '.json', 'w') as fl:
             json.dump(hist, fl)
 
         # save if loss improved
         current_loss = hist['val'][-1]
         if best_test_loss == None or best_test_loss > current_loss:
             best_test_loss = current_loss
-            torch.save(core, save_model_name)
+            torch.save(core, save_model_path)
             print('saved')
 
         # if starting to overfit, stop early
@@ -206,24 +258,33 @@ if not args.impute_using_saved:
         if np.isnan(np.mean(hist['val'][-1])):
             print('Training NaN, exiting...')
             break
-else:
+
+if args.impute_using_saved:
+    print(f'Loading specified weights: {args.impute_using_saved}')
     model = torch.load(args.impute_using_saved)
+
+if args.save_imputed and not args.impute_using_saved:
+    print('Loading last best checkpoint')
+    model = torch.load(save_model_path)
+
+
+if args.impute_data_file or args.save_imputed:
     model = model.to(args.device)
+    model.eval()
+    dset = dataloaders['final']
 
-model.eval()
-dset = dataloaders['final']
-
-if args.impute_data_file:
-    imptab = pd.read_csv(args.impute_data_file).set_index(args.id_name)[feature_ord]
+    impute_mat = args.impute_data_file if args.impute_data_file else args.data_file
+    imptab = pd.read_csv(impute_mat).set_index(args.id_name)[feature_ord]
     print(f'(impute) Dataset size:', imptab.shape[0])
+
     mat_imptab = (imptab.values - train_stats['mean'])/train_stats['std']
     dset = torch.utils.data.DataLoader(
         CopymaskDataset(mat_imptab, 'final'),
         batch_size=args.batch_size,
         shuffle=False, num_workers=0)
-    if not args.output:
-        impute_fparts = args.impute_data_file.split('/')
-        save_table_name = save_folder + f'imputed_{impute_fparts[-1]}'
+    # if not args.output:
+    #     filename = impute_mat.split('/')[-1].replace('.csv', '')
+    #     save_table_name = save_folder + f'imputed_{filename}'
 
     preds_ls = []
     for bi, batch in enumerate(dset):
@@ -243,7 +304,7 @@ if args.impute_data_file:
     pmat = np.concatenate(preds_ls)
     pmat[:, :CONT_BINARY_SPLIT] = (pmat[:,:CONT_BINARY_SPLIT] * train_stats['std'][:CONT_BINARY_SPLIT]) \
         + train_stats['mean'][:CONT_BINARY_SPLIT]
-    template = tab.copy() if not args.impute_data_file else imptab.copy()
+    template = imptab.copy()
     tmat = template.values
     tmat[np.isnan(tmat)] = pmat[np.isnan(tmat)]
     template[:] = tmat
