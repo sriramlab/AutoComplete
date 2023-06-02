@@ -117,11 +117,60 @@ python fit.py datasets/random/data.csv --id_name ID --copymask_amount 0.5 --batc
 python fit.py datasets/random/data.csv --id_name ID --copymask_amount 0.5 --batch_size 2048 --epochs 100 --lr 0.1 --device cuda:1 --seed 4 --bootstrap --save_imputed
 ```
 
-Each command is responsible for saving one imputed version of the original data matrix in the format of `file_location/imputed_data_seed0_bootstrap.csv` and so on. Since each run is independent, the multiple runs are fully parallelizeable. This is recommended in a number of ways such as `parallel -j 5 < multiple_imputation.sh` on UNIX based systems, piping each line further into a job scheduler on compute clusters, and splitting compute load across multiple GPUs by altering the device flag. The script may also be executed as-is, which will impute each matrix sequentially.
+Each command is responsible for saving one imputed version of the original data matrix in the format of `{file_location}/imputed_{data}_seed0_bootstrap.csv` and so on. Since each run is independent, the multiple runs are fully parallelizeable. This is recommended in a number of ways such as `parallel -j 5 < multiple_imputation.sh` on UNIX based systems, piping each line further into a job scheduler on compute clusters, and splitting compute load across multiple GPUs by altering the device flag. The script may also be executed as-is, which will impute each matrix sequentially.
 
 ## Imputation Quality
 
+The need and extent of assess quality of the imputation result may vary for each application.
+We find in general that a high variance ratio (variance of imputed over observed values) and high Pearson r^2 in a 1% simulation of missing values.
+The r^2 can be also used to inform the effective sample size after imputation as N<sub>imputed</sub> * r^2 + N<sub>observed</sub>.
 
+A recommended starting point to threshold features with reasonable imputation quality would be a variance ratio `> 0.2` and r^2 `> 0.2`. These conditions work best for features that have notable amounts of missingness (`> 10%` missing) to avoid edge cases. Based on these conditions, the quality output will also include a flag where `NOM`: no missing values, `LOM`: low missing values (<10%), `LOQ`: low variance ratio and r^2 (<0.2), `LOV` or `LOR`: either low variance (V) or r^2 (R) metric, or `QOK`: all quality conditions are met. These indications are provided only as suggestions for follow up analyses for each feature (Please note the sample data in this repository are randomly generated - therefore only few features will appear to have `QOK`).
+
+With the `--quality` flag of `fit.py`, the script is capable of printing out the variance ratio and r^2 for each feature. This information will also be saved to a csv next to the original data file as `{file_location}/{datafile}_quality.csv`. This command can be mixed with `--save_imputed` for a model which was fitted in the same run or `--impute_using_saved` to use weights which were previously saved.
+
+For example, running:
+
+```bash
+python fit.py datasets/phenotypes/data.csv --id_name ID --copymask_amount 0.5 --batch_size 2048 --epochs 20 --lr 0.1 --device cuda:1 --quality
+```
+
+gives the following printout:
+
+```bash
+Saving model to: datasets/phenotypes/data.pth
+Dataset size: 300000
+Features loaded: contin=8, binary=7
+[E1 train 118/118] - L0.7167 (0.0806 0.3668) 6.4s LR:0.1
+...
+[E20 val 30/30] - L0.2894 (0.0376 0.2452) 1.4s LR:0.1
+Loading last best checkpoint
+(impute) Dataset size: 300000
+Starting # observed values: 3126831
+ Simulating missing values: 3095562.69 < 3091703
+Imputing: 146/147
+=================================================
+Imputation Quality:
+NOM missing=0.0% (no missing values) age
+LOM missing=0.1% var_info=0.00 r2=0.02 effective=x1.0 insomnia.baseline
+LOM missing=0.1% var_info=0.00 r2=0.03 effective=x1.0 alcoholuse.baseline
+LOM missing=0.1% var_info=0.00 r2=0.00 effective=x1.0 alcoholfreq.baseline
+LOQ missing=18.8% var_info=0.00 r2=0.15 effective=x1.0 neuroticismscore.baseline
+LOQ missing=67.0% var_info=0.03 r2=0.12 effective=x1.2 happiness.baseline
+LOQ missing=67.2% var_info=0.01 r2=0.08 effective=x1.2 cannabis.evertaken
+LOQ missing=93.3% var_info=0.14 r2=0.19 effective=x3.6 cannabis.maxfreq
+NOM missing=0.0% (no missing values) sex
+LOQ missing=67.1% var_info=0.03 r2=0.01 effective=x1.0 anxietysocialphobia.diagnosis
+QOK missing=79.9% var_info=0.22 r2=0.25 effective=x2.0 LifetimeMDD
+LOM missing=1.3% var_info=0.05 r2=0.05 effective=x1.0 GPpsy
+LOM missing=1.1% var_info=0.03 r2=0.04 effective=x1.0 Psypsy
+LOQ missing=24.7% var_info=0.14 r2=0.11 effective=x1.0 SelfRepDep
+LOQ missing=37.1% var_info=0.06 r2=0.05 effective=x1.0 ICD10Dep
+=================================================
+done
+```
+
+and saves the quality information to the csv: `datasets/phenotypes/data_quality.csv`.
 
 ## Citing AutoComplete
 

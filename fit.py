@@ -49,6 +49,8 @@ parser.add_argument('--impute_data_file', type=str, help='CSV file where rows ar
 parser.add_argument('--seed', type=int, help='A specific seed to use. Can be used to instantiate multiple imputations.', default=-1)
 parser.add_argument('--bootstrap', help='Flag to specify whether the dataset should be bootstrapped for the purpose of fitting.', default=False, action='store_true')
 parser.add_argument('--multiple', type=int, help='If set, this script will save a list of commands which can be run (either in sequence or in parallel) to save mulitple imputations', default=-1)
+parser.add_argument('--quality', help='Applies to the fitting procedure. If set, this script will compute a variance ratio metric and a r^2 metric for each feature to roughly inform the quality of imputation', default=False, action='store_true')
+parser.add_argument('--simulate_missing', help='Specifies the %% of original data to be simulated as missing for r^2 computation.', default=0.01, type=float)
 
 args = parser.parse_args()
 #%%
@@ -263,15 +265,13 @@ if args.impute_using_saved:
     print(f'Loading specified weights: {args.impute_using_saved}')
     model = torch.load(args.impute_using_saved)
 
-if args.save_imputed and not args.impute_using_saved:
+if (args.save_imputed or args.quality) and not args.impute_using_saved:
     print('Loading last best checkpoint')
     model = torch.load(save_model_path)
 
-
-if args.impute_data_file or args.save_imputed:
+if args.impute_data_file or args.save_imputed or args.quality:
     model = model.to(args.device)
     model.eval()
-    dset = dataloaders['final']
 
     impute_mat = args.impute_data_file if args.impute_data_file else args.data_file
     imptab = pd.read_csv(impute_mat).set_index(args.id_name)[feature_ord]
@@ -282,14 +282,30 @@ if args.impute_data_file or args.save_imputed:
         CopymaskDataset(mat_imptab, 'final'),
         batch_size=args.batch_size,
         shuffle=False, num_workers=0)
-    # if not args.output:
-    #     filename = impute_mat.split('/')[-1].replace('.csv', '')
-    #     save_table_name = save_folder + f'imputed_{filename}'
 
     preds_ls = []
+
+    sim_missing = imptab.values.copy()
+    print('Starting # observed values:', (~np.isnan(sim_missing)).sum())
+    target_missing_sim = (~np.isnan(sim_missing)).sum() * (1 - args.simulate_missing)
+    while target_missing_sim < (~np.isnan(sim_missing)).sum():
+        samplesA = np.random.choice(range(len(sim_missing)), size=len(imptab)//100)
+        samplesB = np.random.choice(range(len(sim_missing)), size=len(imptab)//100)
+        # print(np.isnan(sim_missing[samplesB]).sum())
+        patch = sim_missing[samplesA]
+        patch[np.isnan(sim_missing[samplesB])] = np.nan
+        sim_missing[samplesA] = patch
+        print(f'\r Simulating missing values: {target_missing_sim} < { (~np.isnan(sim_missing)).sum()}', end='')
+    sim_missing = np.isnan(sim_missing)
+    print()
+
     for bi, batch in enumerate(dset):
         datarow, _, masked_inds = batch
         datarow = datarow.float().to(args.device)
+
+        if args.quality:
+            sim_mask = sim_missing[bi*args.batch_size:(bi+1)*args.batch_size]
+            datarow[sim_mask] = 0
 
         with torch.no_grad():
             yhat = model(datarow)
@@ -297,19 +313,68 @@ if args.impute_data_file or args.save_imputed:
         yhat = torch.cat([yhat[:, :sind], torch.sigmoid(yhat[:, sind:])], dim=1)
 
         preds_ls += [yhat.cpu().numpy()]
-        print(f'\r{bi}/{len(dset)}', end='')
-
-    print()
+        print(f'\rImputing: {bi}/{len(dset)}', end='')
 
     pmat = np.concatenate(preds_ls)
-    pmat[:, :CONT_BINARY_SPLIT] = (pmat[:,:CONT_BINARY_SPLIT] * train_stats['std'][:CONT_BINARY_SPLIT]) \
-        + train_stats['mean'][:CONT_BINARY_SPLIT]
-    template = imptab.copy()
-    tmat = template.values
-    tmat[np.isnan(tmat)] = pmat[np.isnan(tmat)]
-    template[:] = tmat
-    template
+    print()
 
-    template.to_csv(save_table_name)
+    if args.quality:
+        print('=================================================')
+        print('Imputation Quality:')
+        qdf = dict(feature=[], info=[], r2=[], quality=[])
+        for pi, feature in enumerate(imptab.columns):
+            mfrac = imptab[feature].isna().sum() / len(imptab)
+            dxstr = '(no missing values)'
+            var_info = None
+            simr2 = 0
+            flag = 'NOM'
+            if mfrac > 0:
+
+                var_imp = pmat[:, pi][imptab[feature].isna()].var()
+                var_obs = imptab[feature][~imptab[feature].isna()].values.var()
+                var_info = var_imp / var_obs
+
+                vsim = sim_missing[:, pi] & ~imptab[feature].isna()
+                nsim = vsim.sum()
+                simr2 = np.corrcoef(pmat[:, pi][vsim], imptab[feature].values[vsim])[0, 1]**2
+
+                Nobs = np.sum(~imptab[feature].isna())
+                Neff = int(simr2 * np.sum(imptab[feature].isna()) + Nobs)
+                eff_fold = Neff / Nobs
+
+
+
+                if mfrac < 0.1:
+                    flag = 'LOM'
+                else:
+                    if var_info >=0.2 and simr2 < 0.2:
+                        flag = 'LOR'
+                    elif var_info < 0.2 and simr2 >= 0.2:
+                        flag = 'LOV'
+                    elif var_info >= 0.2 and simr2 >= 0.2:
+                        flag = 'QOK'
+                    else:
+                        flag = 'LOQ'
+
+                dxstr = f'var_info={var_info:.2f} r2={simr2:.2f} effective=x{eff_fold:.1f}'
+            qdf['feature'] += [feature]
+            qdf['info'] += [var_info]
+            qdf['r2'] += [simr2]
+            qdf['quality'] += [flag]
+            print(f'{flag} missing={mfrac*100:.1f}% {dxstr}', feature)
+        print('=================================================')
+        qdf = pd.DataFrame(qdf)
+        qdf.to_csv(save_model_path.replace('.pth', '_quality.csv'), index=False)
+
+    if args.impute_data_file or args.save_imputed:
+        pmat[:, :CONT_BINARY_SPLIT] = (pmat[:,:CONT_BINARY_SPLIT] * train_stats['std'][:CONT_BINARY_SPLIT]) \
+            + train_stats['mean'][:CONT_BINARY_SPLIT]
+        template = imptab.copy()
+        tmat = template.values
+        tmat[np.isnan(tmat)] = pmat[np.isnan(tmat)]
+        template[:] = tmat
+        template
+
+        template.to_csv(save_table_name)
 
 print('done')
