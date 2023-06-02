@@ -121,8 +121,8 @@ Each command is responsible for saving one imputed version of the original data 
 
 ## Imputation Quality
 
-The need and extent of assess quality of the imputation result may vary for each application.
-We find in general that a high variance ratio (variance of imputed over observed values) and high Pearson r^2 in a 1% simulation of missing values.
+The need and extent to assess the quality of the imputation result may vary for each application.
+We find in general that high variance ratio (variance of imputed over that of observed values) and high Pearson r^2 in a 1% simulation of missing values are indicators of reasonable imputation quality.
 The r^2 can be also used to inform the effective sample size after imputation as N<sub>imputed</sub> * r^2 + N<sub>observed</sub>.
 
 A recommended starting point to threshold features with reasonable imputation quality would be a variance ratio `> 0.2` and r^2 `> 0.2`. These conditions work best for features that have notable amounts of missingness (`> 10%` missing) to avoid edge cases. Based on these conditions, the quality output will also include a flag where `NOM`: no missing values, `LOM`: low missing values (<10%), `LOQ`: low variance ratio and r^2 (<0.2), `LOV` or `LOR`: either low variance (V) or r^2 (R) metric, or `QOK`: all quality conditions are met. These indications are provided only as suggestions for follow up analyses for each feature (Please note the sample data in this repository are randomly generated - therefore only few features will appear to have `QOK`).
