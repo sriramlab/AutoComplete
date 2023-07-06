@@ -6,20 +6,29 @@ import argparse
 import sys
 #%%
 class args:
-    data_file = 'datasets/phenotypes/data_fit.csv'
-    id_name = 'ID'
-    lr = 0.1
-    batch_size = 2048
+    data_file = 'datasets/mate_female_all/data_nosex.csv'
+    id_name = 'f.eid'
+    lr = 0.001
+    batch_size = 1024
     val_split = 0.8
-    device = 'cuda:0'
-    epochs = 200
+    device = 'cuda:1'
+    epochs = 300
     momentum = 0.9
-    impute_using_saved = 'datasets/phenotypes/model.pth'
-    output = None
+    # impute_using_saved = 'datasets/mate_male/data_fit.pth'
+    impute_using_saved = None
+    output = 'datasets/mate_female_all/debug.csv'
     encoding_ratio = 1
     depth = 1
     impute_data_file = None
-    copymask_amount = 0.3
+    copymask_amount = 0.5
+    num_torch_threads = 8
+    simulate_missing = 0.01
+    bootstrap = False
+    seed = -1
+    quality = True
+    multiple = -1
+    save_model_path = None
+    save_imputed = True
 #%%
 parser = argparse.ArgumentParser(description='AutoComplete')
 parser.add_argument('data_file', type=str, help='CSV file where rows are samples and columns correspond to features.')
@@ -51,6 +60,7 @@ parser.add_argument('--bootstrap', help='Flag to specify whether the dataset sho
 parser.add_argument('--multiple', type=int, help='If set, this script will save a list of commands which can be run (either in sequence or in parallel) to save mulitple imputations', default=-1)
 parser.add_argument('--quality', help='Applies to the fitting procedure. If set, this script will compute a variance ratio metric and a r^2 metric for each feature to roughly inform the quality of imputation', default=False, action='store_true')
 parser.add_argument('--simulate_missing', help='Specifies the %% of original data to be simulated as missing for r^2 computation.', default=0.01, type=float)
+parser.add_argument('--num_torch_threads', help='Prevents torch from taking up all threads on a device. Can be increased when only running one fit but default can be sufficient.', default=8, type=int)
 
 args = parser.parse_args()
 #%%
@@ -84,7 +94,7 @@ if args.bootstrap:
     save_model_path += f'_bootstrap'
 
 save_model_path += '.pth'
-save_table_name += '.csv'
+if not args.output: save_table_name += '.csv'
 
 if args.save_model_path is not None:
     save_model_path = args.save_model_path
@@ -95,6 +105,7 @@ if args.impute_using_saved or args.save_imputed:
     print('Saving imputed table to:', save_table_name)
 #%%
 import torch
+torch.set_num_threads(args.num_torch_threads)
 import random
 import numpy as np
 
@@ -140,10 +151,12 @@ dsets = dict(
     final=tab[feature_ord],
 )
 # %%
-train_stats = dict(
-    mean=dsets['train'].mean().values,
-    std=dsets['train'].std().values,
-)
+# train_stats = dict(
+#     mean=dsets['train'].mean().values,
+#     std=dsets['train'].std().values,
+# )
+train_stats = dict(mean=dsets['train'].mean().values)
+train_stats['std'] = np.nanstd(dsets['train'].values - train_stats['mean'], axis=0)
 #%%
 normd_dsets = {
     split: (dsets[split].values - train_stats['mean'])/train_stats['std'] \
@@ -260,7 +273,7 @@ if not args.impute_using_saved:
         if np.isnan(np.mean(hist['val'][-1])):
             print('Training NaN, exiting...')
             break
-
+#%%
 if args.impute_using_saved:
     print(f'Loading specified weights: {args.impute_using_saved}')
     model = torch.load(args.impute_using_saved)
@@ -285,19 +298,20 @@ if args.impute_data_file or args.save_imputed or args.quality:
 
     preds_ls = []
 
-    sim_missing = imptab.values.copy()
-    print('Starting # observed values:', (~np.isnan(sim_missing)).sum())
-    target_missing_sim = (~np.isnan(sim_missing)).sum() * (1 - args.simulate_missing)
-    while target_missing_sim < (~np.isnan(sim_missing)).sum():
-        samplesA = np.random.choice(range(len(sim_missing)), size=len(imptab)//100)
-        samplesB = np.random.choice(range(len(sim_missing)), size=len(imptab)//100)
-        # print(np.isnan(sim_missing[samplesB]).sum())
-        patch = sim_missing[samplesA]
-        patch[np.isnan(sim_missing[samplesB])] = np.nan
-        sim_missing[samplesA] = patch
-        print(f'\r Simulating missing values: {target_missing_sim} < { (~np.isnan(sim_missing)).sum()}', end='')
-    sim_missing = np.isnan(sim_missing)
-    print()
+    if args.quality:
+        sim_missing = imptab.values.copy()
+        print('Starting # observed values:', (~np.isnan(sim_missing)).sum())
+        target_missing_sim = (~np.isnan(sim_missing)).sum() * (1 - args.simulate_missing)
+        while target_missing_sim < (~np.isnan(sim_missing)).sum():
+            samplesA = np.random.choice(range(len(sim_missing)), size=len(imptab)//100)
+            samplesB = np.random.choice(range(len(sim_missing)), size=len(imptab)//100)
+            # print(np.isnan(sim_missing[samplesB]).sum())
+            patch = sim_missing[samplesA]
+            patch[np.isnan(sim_missing[samplesB])] = np.nan
+            sim_missing[samplesA] = patch
+            print(f'\r Simulating missing values: {target_missing_sim} < { (~np.isnan(sim_missing)).sum()}', end='')
+        sim_missing = np.isnan(sim_missing)
+        print()
 
     for bi, batch in enumerate(dset):
         datarow, _, masked_inds = batch
@@ -316,13 +330,18 @@ if args.impute_data_file or args.save_imputed or args.quality:
         print(f'\rImputing: {bi}/{len(dset)}', end='')
 
     pmat = np.concatenate(preds_ls)
+    pmat *= train_stats['std']
+    pmat += train_stats['mean']
     print()
 
     if args.quality:
         print('=================================================')
         print('Imputation Quality:')
+        morder = np.argsort(imptab.isna().sum() / len(imptab))
         qdf = dict(feature=[], info=[], r2=[], quality=[])
-        for pi, feature in enumerate(imptab.columns):
+        # for pi, feature in enumerate(imptab.columns):
+        for pi in morder:
+            feature = imptab.columns[pi]
             mfrac = imptab[feature].isna().sum() / len(imptab)
             dxstr = '(no missing values)'
             var_info = None
@@ -339,7 +358,10 @@ if args.impute_data_file or args.save_imputed or args.quality:
                 simr2 = np.corrcoef(pmat[:, pi][vsim], imptab[feature].values[vsim])[0, 1]**2
 
                 Nobs = np.sum(~imptab[feature].isna())
-                Neff = int(simr2 * np.sum(imptab[feature].isna()) + Nobs)
+                if not np.isnan(simr2):
+                    Neff = int(simr2 * np.sum(imptab[feature].isna()) + Nobs)
+                else:
+                    Neff = Nobs
                 eff_fold = Neff / Nobs
 
 
@@ -367,8 +389,6 @@ if args.impute_data_file or args.save_imputed or args.quality:
         qdf.to_csv(save_model_path.replace('.pth', '_quality.csv'), index=False)
 
     if args.impute_data_file or args.save_imputed:
-        pmat[:, :CONT_BINARY_SPLIT] = (pmat[:,:CONT_BINARY_SPLIT] * train_stats['std'][:CONT_BINARY_SPLIT]) \
-            + train_stats['mean'][:CONT_BINARY_SPLIT]
         template = imptab.copy()
         tmat = template.values
         tmat[np.isnan(tmat)] = pmat[np.isnan(tmat)]
